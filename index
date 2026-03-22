@@ -1,0 +1,143 @@
+<?php
+error_reporting(E_ALL ^ E_DEPRECATED);
+$file = "geosafe_logs.csv";
+$chart_data = [];
+$h = @fopen($file, "r");
+if ($h) {
+    while (($d = fgetcsv($h, 1000, ",")) !== FALSE) {
+        if (count($d) >= 3) {
+            $chart_data[] = ["loc" => $d[0], "var" => (floatval($d[2]) - floatval($d[1]))];
+        }
+    }
+    fclose($h);
+}
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoSafe v5.0 | 3MTT Showcase</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body { background: #011613; color: #e2e8f0; font-family: 'Inter', sans-serif; overflow-x: hidden; }
+        .glass { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        #map { height: 220px; border-radius: 12px; z-index: 1; margin-bottom: 1rem; }
+        .emerald-gradient { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
+        .btn-action { @apply flex items-center justify-center gap-2 p-3 rounded-lg text-xs font-bold transition-all active:scale-95; }
+    </style>
+</head>
+<body class="p-4 pb-20">
+
+    <header class="text-center mb-4">
+        <h1 class="text-2xl font-bold text-emerald-400">GEOSAFE v5.0</h1>
+        <p class="text-[10px] text-emerald-200/60 uppercase tracking-[0.2em]">Hydro-Intelligence & BOQ | Geol. E. Rukevwe</p>
+    </header>
+
+    <div class="glass p-4 rounded-xl mb-4">
+        <select id="lgaSelect" class="w-full bg-slate-800 border border-emerald-500/30 p-3 rounded-lg text-white mb-3">
+            <option value="">-- Select Target LGA --</option>
+            <option value="Ankpa">Ankpa (Kogi) - Benue Trough</option>
+            <option value="Ikeja">Ikeja (Lagos) - Sedimentary</option>
+            <option value="Kano">Kano (Kano) - Basement Complex</option>
+            <option value="Port Harcourt">Port Harcourt - Niger Delta</option>
+            <option value="Effurun">Effurun (Delta) - Deltaic</option>
+        </select>
+        <button onclick="runAnalysis()" class="w-full emerald-gradient py-3 rounded-lg font-bold shadow-lg">RUN FIELD ANALYSIS</button>
+    </div>
+
+    <div id="map"></div>
+
+    <div id="resultBox" class="glass p-4 rounded-xl hidden mb-4 border-l-4 border-emerald-500">
+        <h3 id="resName" class="text-lg font-bold text-emerald-400 mb-2"></h3>
+        <div class="grid grid-cols-2 gap-2 text-[11px] mb-3">
+            <div class="p-2 bg-white/5 rounded">EST. DEPTH: <span id="resDepth" class="font-bold text-white text-sm"></span></div>
+            <div class="p-2 bg-white/5 rounded">TOTAL BOQ: <span id="resBOQ" class="font-bold text-emerald-400 text-sm"></span></div>
+        </div>
+        <div class="p-3 bg-emerald-900/20 border border-emerald-500/30 rounded-lg mb-3">
+
+            <p class="text-[10px] font-bold text-emerald-400 uppercase mb-1">Lithology & SOP</p>
+            <p id="resSOP" class="text-xs text-emerald-100"></p>
+        </div>
+        
+        <div class="grid grid-cols-2 gap-2">
+            <button onclick="shareWhatsApp()" class="bg-green-600 p-2 rounded text-[10px] font-bold">WhatsApp Quote</button>
+            <button onclick="exportPDF()" class="bg-red-600 p-2 rounded text-[10px] font-bold">Export PDF</button>
+            <button onclick="showWHO()" class="bg-blue-600 p-2 rounded text-[10px] font-bold">WHO Standards</button>
+            <button onclick="location.reload()" class="bg-gray-700 p-2 rounded text-[10px] font-bold">Reset Logs</button>
+        </div>
+    </div>
+
+    <div class="glass p-4 rounded-xl mb-4">
+        <p class="text-[10px] font-bold text-emerald-400 mb-2 uppercase italic">Drilling Variance (Actual vs Predicted)</p>
+        <canvas id="varianceChart" style="max-height: 150px;"></canvas>
+    </div>
+
+    <script>
+        const lgaData = {
+            "Ikeja": {depth: 45, lith: "Coastal Plain Sands", lat: 6.6, lng: 3.35, rate: 12000, sop: "Sedimentary zone. High Iron risk. Use PVC casing."},
+            "Ankpa": {depth: 60, lith: "Benue Trough Sediments", lat: 7.4, lng: 7.6, rate: 15000, sop: "Moderate rock. Standard DTH rig. Clean water expected."},
+            "Kano": {depth: 75, lith: "Basement Complex", lat: 12.0, lng: 8.5, rate: 22000, sop: "Hard Crystalline Rock. Air Percussion required. Fluoride alert."},
+            "Port Harcourt": {depth: 32, lith: "Deltaic Sands", lat: 4.82, lng: 7.03, rate: 18000, sop: "Coastal sands. Salinity risk. Treat for corrosive pH."},
+            "Effurun": {depth: 28, lith: "Deltaic Formation", lat: 5.56, lng: 5.78, rate: 14000, sop: "Loose sands. Light rig. Fast drilling, high recharge potential."}
+        };
+
+        let map = L.map('map', { zoomControl: false }).setView([9.08, 8.67], 5);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+
+        function runAnalysis() {
+            const val = document.getElementById('lgaSelect').value;
+            if(!val) return;
+            const data = lgaData[val];
+            const boq = data.depth * data.rate;
+            
+            document.getElementById('resultBox').classList.remove('hidden');
+            document.getElementById('resName').innerText = val + " Intelligence";
+            document.getElementById('resDepth').innerText = data.depth + "m";
+            document.getElementById('resBOQ').innerText = "₦" + boq.toLocaleString();
+            document.getElementById('resSOP').innerText = data.lith + ". " + data.sop;
+
+            map.flyTo([data.lat, data.lng], 12);
+            L.marker([data.lat, data.lng]).addTo(map).bindPopup(val).openPopup();
+        }
+
+        function shareWhatsApp() {
+            const text = encodeURIComponent(`*GEOSAFE BOREHOLE QUOTE*\nLocation: ${document.getElementById('resName').innerText}\nEst. Depth: ${document.getElementById('resDepth').innerText}\nTotal BOQ: ${document.getElementById('resBOQ').innerText}\nSOP: ${document.getElementById('resSOP').innerText}`);
+            window.open(`https://wa.me/?text=${text}`);
+        }
+
+        function exportPDF() {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            doc.setFontSize(20); doc.text("GEOSAFE FIELD AUDIT", 10, 20);
+            doc.setFontSize(12); doc.text(document.getElementById('resultBox').innerText, 10, 40);
+            doc.save("GeoSafe_Report.pdf");
+        }
+
+        function showWHO() {
+            alert("WHO Drinking Water Standards:\n- Iron: < 0.3 mg/L\n- Fluoride: < 1.5 mg/L\n- pH: 6.5 - 8.5\n- Lead: 0.01 mg/L");
+        }
+
+        const rawData = <?php echo json_encode($chart_data); ?>;
+        new Chart(document.getElementById('varianceChart'), {
+            type: 'line',
+            data: {
+                labels: rawData.map(i => i.loc),
+                datasets: [{
+                    label: 'Variance',
+                    data: rawData.map(i => i.var),
+                    borderColor: '#10b981',
+                    tension: 0.4,
+                    fill: false
+                }]
+            },
+            options: { scales: { y: { display: false }, x: { ticks: { color: '#4ade80', font: { size: 8 } } } }, plugins: { legend: { display: false } } }
+        });
+    </script>
+</body>
+</html>
+
